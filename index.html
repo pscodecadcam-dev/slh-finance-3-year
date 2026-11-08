@@ -1,0 +1,1303 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GENERIC SLH ANALYZE</title>
+
+  <!-- Google Fonts: Prompt -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Prompt:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Prompt', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              50: '#f0f9ff',
+              100: '#e0f2fe',
+              500: '#0284c7',
+              600: '#0369a1',
+              700: '#0c4a6e',
+              800: '#075985',
+              900: '#0c4a6e',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- React & ReactDOM CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <!-- Babel Standalone for JSX -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- html2pdf.js CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+
+  <style>
+    * { font-family: 'Prompt', sans-serif !important; }
+    input[type=number], input[type=date], select {
+      transition: all 0.2s;
+    }
+    input[type=number]:focus, input[type=date]:focus, select:focus {
+      outline: none;
+      border-color: #0284c7;
+      box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.15);
+    }
+    .custom-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+    .custom-scroll::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+    .custom-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    .custom-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    
+    @media print {
+      .no-print { display: none !important; }
+      .print-only { display: block !important; }
+      body { background: rgb(226, 210, 210) !important; overflow: visible !important; }
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased h-screen overflow-hidden flex flex-col">
+  <div id="root" class="h-full"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    // --- Helper Functions & Financial Formulas ---
+    const fmt = (val) => new Intl.NumberFormat('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(val) || 0);
+    const fmtInt = (val) => new Intl.NumberFormat('th-TH', { maximumFractionDigits: 0 }).format(Number(val) || 0);
+    const num = (val) => Number(val) || 0;
+
+    // Straight-Line Depreciation Calculation (วิธีแบบเส้นตรง)
+    function calcStraightLineDep(cost, lifeYears) {
+      const c = num(cost);
+      const l = num(lifeYears);
+      if (l <= 0) return 0;
+      return c / l;
+    }
+
+    // Net Present Value (NPV) คำนวณหามูลค่าปัจจุบันสุทธิ
+    function calcNPV(rate, cashFlows) {
+      return cashFlows.reduce((acc, val, t) => acc + val / Math.pow(1 + rate, t), 0);
+    }
+
+    // Internal Rate of Return (IRR) via Binary Search
+    function calcIRR(cashFlows) {
+      const hasPos = cashFlows.some(c => c > 0);
+      const hasNeg = cashFlows.some(c => c < 0);
+      if (!hasPos || !hasNeg) return null;
+
+      let low = -0.9999;
+      let high = 5.0; // Max 500%
+      for (let i = 0; i < 100; i++) {
+        let mid = (low + high) / 2;
+        let npv = cashFlows.reduce((acc, c, t) => acc + c / Math.pow(1 + mid, t), 0);
+        if (Math.abs(npv) < 0.0001) return mid * 100;
+        if (npv > 0) low = mid;
+        else high = mid;
+      }
+      return ((low + high) / 2) * 100;
+    }
+
+    // Profitability Index (PI)
+    function calcPI(rate, initialInvest, futureCFs) {
+      if (initialInvest <= 0) return null;
+      const pvInflows = futureCFs.reduce((acc, val, t) => acc + val / Math.pow(1 + rate, t + 1), 0);
+      return pvInflows / initialInvest;
+    }
+
+    // Payback Period (Years and Months)
+    function calcPayback(initialInvest, annualCFs) {
+      if (initialInvest <= 0) return "ไม่มีการลงทุนในปีที่ 0";
+      let cum = -initialInvest;
+      for (let i = 0; i < annualCFs.length; i++) {
+        let cf = annualCFs[i];
+        if (cf <= 0) {
+          cum += cf;
+          continue;
+        }
+        if (cum + cf >= 0) {
+          let fraction = (-cum) / cf;
+          let totalMonths = Math.round((i + fraction) * 12);
+          let years = Math.floor(totalMonths / 12);
+          let months = totalMonths % 12;
+          return `${years} ปี ${months} เดือน`;
+        }
+        cum += cf;
+      }
+      return "ไม่คืนทุนใน 3 ปี";
+    }
+
+    // Helper: สร้างจุดข้อมูลกระแสเงินสดสะสมรายเดือน (37 จุดข้อมูล: เดือนที่ 0 - 36)
+    function genMonthlyCumCF(initialInvest, netY1, netY2, netY3) {
+      const points = [];
+      let cum = -initialInvest;
+      points.push({ x: 0, y: cum });
+
+      const mNet1 = netY1 / 12;
+      const mNet2 = netY2 / 12;
+      const mNet3 = netY3 / 12;
+
+      for (let m = 1; m <= 36; m++) {
+        if (m <= 12) {
+          cum += mNet1;
+        } else if (m <= 24) {
+          cum += mNet2;
+        } else {
+          cum += mNet3;
+        }
+        points.push({ x: m, y: cum });
+      }
+      return points;
+    }
+
+    // --- Chart Component (ปรับปรุง Minor Scale X = 1 เดือน, Y = 100,000 บาท) ---
+    function FinancialChart({ muniBaseCF, privBaseCF, muniSensCF, privSensCF, breakEvenMonths, calcMode }) {
+      const chartRef = useRef(null);
+      const chartInstanceRef = useRef(null);
+
+      useEffect(() => {
+        if (!chartRef.current) return;
+        const ctx = chartRef.current.getContext('2d');
+
+        if (chartInstanceRef.current) {
+          chartInstanceRef.current.destroy();
+        }
+
+        chartInstanceRef.current = new Chart(ctx, {
+          type: 'line',
+          data: {
+            datasets: [
+              {
+                label: 'กระแสเงินสดสะสม เทศบาล (Base Case)',
+                data: muniBaseCF,
+                borderColor: '#0284c7',
+                backgroundColor: 'rgba(2, 132, 199, 0.08)',
+                fill: true,
+                borderWidth: 2.5,
+                tension: 0.1,
+                pointRadius: (ctx) => (ctx.raw && ctx.raw.x % 12 === 0) ? 4 : 1,
+                pointHoverRadius: 6,
+              },
+              {
+                label: 'กระแสเงินสดสะสม เอกชน (Base Case)',
+                data: privBaseCF,
+                borderColor: '#10b981',
+                backgroundColor: 'rgba(16, 185, 129, 0.08)',
+                fill: true,
+                borderWidth: 2.5,
+                tension: 0.1,
+                pointRadius: (ctx) => (ctx.raw && ctx.raw.x % 12 === 0) ? 4 : 1,
+                pointHoverRadius: 6,
+              },
+              {
+                label: 'เทศบาล (Sensitivity Case)',
+                data: muniSensCF,
+                borderColor: '#64748b',
+                borderDash: [4, 4],
+                borderWidth: 1.8,
+                fill: false,
+                pointRadius: (ctx) => (ctx.raw && ctx.raw.x % 12 === 0) ? 3 : 0,
+              },
+              {
+                label: 'เอกชน (Sensitivity Case)',
+                data: privSensCF,
+                borderColor: '#f43f5e',
+                borderDash: [4, 4],
+                borderWidth: 1.8,
+                fill: false,
+                pointRadius: (ctx) => (ctx.raw && ctx.raw.x % 12 === 0) ? 3 : 0,
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+              mode: 'index',
+              intersect: false,
+            },
+            plugins: {
+              legend: { 
+                position: 'top',
+                labels: { font: { family: 'Prompt', size: 12 }, boxWidth: 14 } 
+              },
+              tooltip: {
+                callbacks: {
+                  title: (items) => {
+                    if (!items.length) return '';
+                    const m = items[0].raw.x;
+                    const yrs = Math.floor(m / 12);
+                    const mos = m % 12;
+                    let str = `เดือนที่ ${m}`;
+                    if (m === 0) return 'เดือนที่ 0 (เริ่มโครงการ / ลงทุน)';
+                    if (mos === 0) str += ` (ครบปีที่ ${yrs})`;
+                    else str += ` (${yrs > 0 ? yrs + ' ปี ' : ''}${mos} เดือน)`;
+                    return str;
+                  },
+                  label: (ctx) => `${ctx.dataset.label}: ${fmt(ctx.raw.y)} บาท`
+                }
+              }
+            },
+            scales: {
+              x: {
+                type: 'linear',
+                min: 0,
+                max: 36,
+                title: {
+                  display: true,
+                  text: 'ระยะเวลาโครงการ (เดือน)',
+                  font: { family: 'Prompt', size: 11, weight: '500' },
+                  color: '#475569'
+                },
+                ticks: {
+                  stepSize: 1, // Minor scale: ช่องละ 1 เดือน
+                  font: { family: 'Prompt', size: 10 },
+                  callback: function(val) {
+                    if (val === 0) return 'M0';
+                    if (val % 12 === 0) return `ปีที่ ${val / 12}`;
+                    if (val % 6 === 0) return `M${val}`;
+                    return ''; // แสดงป้ายชื่อเฉพาะช่วงสำคัญเพื่อความสะอาด แต่คงเส้น Grid 1 เดือนไว้
+                  }
+                },
+                grid: {
+                  color: (ctx) => {
+                    if (!ctx.tick) return '#f1f5f9';
+                    const v = ctx.tick.value;
+                    if (v % 12 === 0) return '#94a3b8'; // เส้นหลักปี
+                    if (v % 3 === 0) return '#cbd5e1';  // เส้นไตรมาส
+                    return '#f1f5f9'; // Minor Grid Line: ช่องละ 1 เดือน
+                  },
+                  lineWidth: (ctx) => {
+                    if (!ctx.tick) return 0.5;
+                    const v = ctx.tick.value;
+                    if (v % 12 === 0) return 1.5;
+                    if (v % 3 === 0) return 1;
+                    return 0.5;
+                  }
+                }
+              },
+              y: {
+                title: {
+                  display: true,
+                  text: 'กระแสเงินสดสะสม (บาท)',
+                  font: { family: 'Prompt', size: 11, weight: '500' },
+                  color: '#475569'
+                },
+                ticks: {
+                  stepSize: 100000, // Minor scale: ช่องละ 100,000 บาท
+                  font: { family: 'Prompt', size: 10 },
+                  callback: (value) => fmtInt(value)
+                },
+                grid: {
+                  color: (ctx) => {
+                    if (!ctx.tick) return '#f1f5f9';
+                    const v = ctx.tick.value;
+                    if (v === 0) return '#0f172a'; // เส้นศูนย์แกน
+                    if (v % 500000 === 0) return '#94a3b8'; // เส้นหลักทุก 5 แสน
+                    return '#e2e8f0'; // Minor Grid Line: ช่องละ 100,000 บาท
+                  },
+                  lineWidth: (ctx) => {
+                    if (!ctx.tick) return 0.5;
+                    const v = ctx.tick.value;
+                    if (v === 0) return 2;
+                    if (v % 500000 === 0) return 1.2;
+                    return 0.5;
+                  }
+                }
+              }
+            }
+          }
+        });
+
+        return () => {
+          if (chartInstanceRef.current) chartInstanceRef.current.destroy();
+        };
+      }, [muniBaseCF, privBaseCF, muniSensCF, privSensCF, breakEvenMonths, calcMode]);
+
+      return (
+        <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-200 mb-6">
+          <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
+            <div>
+              <h3 className="font-bold text-slate-800 text-base">แผนภูมิ: เปรียบเทียบกระแสเงินสดสะสมรายเดือน (Cumulative Cash Flow)</h3>
+              <p className="text-xs text-slate-500">
+                Minor Scale แกน X = 1 เดือน, แกน Y = 100,000 บาท
+                {calcMode === 'MODE1' && (
+                  <span className="ml-1 text-brand-700 font-semibold">(เป้าหมายจุดคุ้มทุน NPV=0 เดือนที่ {breakEvenMonths})</span>
+                )}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full border border-slate-200">
+                minor scale X: 1 เดือน
+              </span>
+              <span className="text-xs font-medium bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full border border-slate-200">
+                minor scale Y: 100,000 บ.
+              </span>
+            </div>
+          </div>
+          <div className="h-80 w-full">
+            <canvas ref={chartRef}></canvas>
+          </div>
+        </div>
+      );
+    }
+
+    // --- Main Application Component ---
+    function App() {
+      // 1. Asset Section Inputs (ข้อ 1)
+      const [bldgDate, setBldgDate] = useState('2027-01-15');
+      const [bldgVal, setBldgVal] = useState(1250000); // ** มูลค่าคงเหลือของอาคารเดิม+ค่าปรับปรุง
+      const [bldgLife, setBldgLife] = useState(10); // **ใช้อายุใช้งานคงเหลือ ณ วันที่ปรับปุรงเสร็จ**
+
+      const [eqDate, setEqDate] = useState('2027-01-15');
+      const [eqVal, setEqVal] = useState(696500); // ครุภัณฑ์เก่าอายุใช้งานเกิน 15 ปี
+      const [eqLife, setEqLife] = useState(15);
+
+      // คำนวณจำนวนปีที่ใช้งานมาแล้วนับจากวันที่ได้มาจนถึงปีปัจจุบัน (2026)
+      const getElapsedYears = (dateStr) => {
+        if (!dateStr) return 0;
+        const acqYear = new Date(dateStr).getFullYear();
+        const evalYear = 2026;
+        return Math.max(0, evalYear - acqYear);
+      };
+
+      const bldgElapsed = useMemo(() => getElapsedYears(bldgDate), [bldgDate]);
+      const eqElapsed = useMemo(() => getElapsedYears(eqDate), [eqDate]);
+
+      // Straight-Line Depreciation Calculations (วิธีแบบเส้นตรง)
+      const bldgDeprec = useMemo(() => calcStraightLineDep(bldgVal, bldgLife), [bldgVal, bldgLife]);
+      const eqDeprec = useMemo(() => calcStraightLineDep(eqVal, eqLife), [eqVal, eqLife]);
+
+      // มูลค่าตามบัญชี ณ วันเริ่มต้นสัญญาเช่า (หลังหักค่าเสื่อมราคาสะสม)
+      const bldgBookValStart = useMemo(() => Math.max(0, num(bldgVal) - (bldgDeprec * bldgElapsed)), [bldgVal, bldgDeprec, bldgElapsed]);
+      const eqBookValStart = useMemo(() => Math.max(0, num(eqVal) - (eqDeprec * eqElapsed)), [eqVal, eqDeprec, eqElapsed]);
+
+      // มูลค่าคงเหลือตามบัญชี ณ สิ้นปีที่ 1, 2, 3
+      const bldgResY1 = useMemo(() => Math.max(0, bldgBookValStart - bldgDeprec * 1), [bldgBookValStart, bldgDeprec]);
+      const bldgResY2 = useMemo(() => Math.max(0, bldgBookValStart - bldgDeprec * 2), [bldgBookValStart, bldgDeprec]);
+      const bldgResY3 = useMemo(() => Math.max(0, bldgBookValStart - bldgDeprec * 3), [bldgBookValStart, bldgDeprec]);
+
+      const eqResY1 = useMemo(() => Math.max(0, eqBookValStart - eqDeprec * 1), [eqBookValStart, eqDeprec]);
+      const eqResY2 = useMemo(() => Math.max(0, eqBookValStart - eqDeprec * 2), [eqBookValStart, eqDeprec]);
+      const eqResY3 = useMemo(() => Math.max(0, eqBookValStart - eqDeprec * 3), [eqBookValStart, eqDeprec]);
+
+      // 2. Animal Statistics (ข้อ 2)
+      const [pigCount, setPigCount] = useState(5277);
+      const [cattleCount, setCattleCount] = useState(868);
+
+      // Fees & Taxes (ข้อ 4)
+      const [pigServiceFee, setPigServiceFee] = useState(350); // บาท/ตัว
+      const [cattleServiceFee, setCattleServiceFee] = useState(150); // บาท/ตัว
+      const pigTaxRate = 15; // บาท/ตัว
+      const cattleTaxRate = 20; // บาท/ตัว
+
+      // 3. Operating Costs (ข้อ 3)
+      // 3.1 Municipal Costs (ผู้ให้เช่า)
+      const [investBldg, setInvestBldg] = useState(800000); // ค่าลงทุนปรับปรุงอาคาร
+      const [investEq, setInvestEq] = useState(696500); // ค่าลงทุนจัดซื้อเครื่องจักร
+      const licenseFee = 0; // ค่าธรรมเนียมใบอนุญาตประกอบกิจการ
+      const auctionCost = 0; // ค่าเตรียมการประมูลเช่า ค่าใช้จ่ายประสานงาน
+      const inspectCost = 8000; // ค่าใช้จ่ายในการตรวจประเมิน
+      const [waterTestCost, setWaterTestCost] = useState(20000); // ค่าตรวจวิเคราะห์คุณภาพน้ำ
+
+      // 3.2 Private Costs (ผู้เช่า)
+      const [laborSlaughter, setLaborSlaughter] = useState(527700); // ค่าจ้างแรงงาน
+      const [laborVet, setLaborVet] = useState(120000); // ค่าจ้างพนักงานตรวจโรคสัตว์
+      const [laborClean, setLaborClean] = useState(240000); // ค่าจ้างเสมียนและพนักงานทำความสะอาดต่อปี
+      const [elecCost, setElecCost] = useState(138000); // ค่าไฟฟ้าต่อปี
+      const [waterCost, setWaterCost] = useState(25000); // ค่าน้ำประปา ใช้น้ำบาดาล
+      const [envCleanCost, setEnvCleanCost] = useState(3000); // ค่าสารเคมี น้ำยาทำความสะอาด เครื่องมือทำความสะอาด
+      const toolsCost = 5000; // ค่าจัดซื้อเครื่องมือ มีด หินลับมีด
+      
+      const [sumInsured, setSumInsured] = useState(2000000); // ทุนประกันอัคคีภัย
+      const insurancePremium = useMemo(() => (num(sumInsured) / 1000) * 1.58, [sumInsured]);
+
+      const [landTax, setLandTax] = useState(9965.67); // ภาษีโรงเรือน
+
+      // 4. Macro & System Configurations
+      const [includeDeprec, setIncludeDeprec] = useState(false);
+      const [calcMode, setCalcMode] = useState('MODE1');
+      
+      // Mode 1: ผู้ใช้สามารถเลือกเดือนที่ต้องการให้ NPV=0 ได้เอง (1 - 36 เดือน)
+      const [breakEvenMonths, setBreakEvenMonths] = useState(33);
+      
+      // Mode 2: Slider ร้อยละจากกำไรจากการดำเนินงานเอกชน (0% - 100%)
+      const [profitSharePct, setProfitSharePct] = useState(33);
+
+      // Macro Parameters
+      const [inflationRate, setInflationRate] = useState(2.00); // อัตราเงินเฟ้อเฉลี่ย 3 ปี
+      const [oppCostRate, setOppCostRate] = useState(0.40); // ดอกเบี้ยเงินฝากประจำ 12 เดือน
+      const [discountRate, setDiscountRate] = useState(5.0); // อัตราคิดลด
+
+      // Sensitivity Analysis Slider (0% - 50%)
+      const [sensDropPct, setSensDropPct] = useState(0);
+
+      // Escalation Rate for Year 2 & 3 Rent: (Opportunity Cost + Inflation)
+      const escalationRate = useMemo(() => (num(inflationRate) + num(oppCostRate)) / 100, [inflationRate, oppCostRate]);
+
+      // Total Year 0 Investment Cost for Municipality
+      const totalInvestY0 = useMemo(() => num(investBldg) + num(investEq), [investBldg, investEq]);
+
+      // Annual Municipal Non-Rent Operating Expense
+      const muniAnnualOpExp = useMemo(() => {
+        const base = licenseFee + auctionCost + inspectCost + num(waterTestCost);
+        const dep = includeDeprec ? (bldgDeprec + eqDeprec) : 0;
+        return base + dep;
+      }, [licenseFee, auctionCost, inspectCost, waterTestCost, includeDeprec, bldgDeprec, eqDeprec]);
+
+      // Annual Slaughter Tax Revenue for Municipality ค่าบริการที่เป็นรายได้ของผู้เช่า
+      const calcSlaughterTax = (scale = 1.0) => {
+        const p = num(pigCount) * scale;
+        const c = num(cattleCount) * scale;
+        return (p * pigTaxRate) + (c * cattleTaxRate);
+      };
+
+      // Annual Private Service Revenue
+      const calcPrivRevenue = (scale = 1.0) => {
+        const p = num(pigCount) * scale;
+        const c = num(cattleCount) * scale;
+        return (p * num(pigServiceFee)) + (c * num(cattleServiceFee));
+      };
+
+      // Annual Private Expenses excluding Rent and Stamp Duty
+      const calcPrivOpExp = (yearIndex, scale = 1.0) => {
+        const labor = (num(laborSlaughter) + num(laborClean)) * scale + num(laborVet);
+        const utilities = (num(elecCost) + num(waterCost) + num(envCleanCost)) * scale;
+        
+        // Repair cost = 5% of remaining asset value
+        let resVal = 0;
+        if (yearIndex === 1) resVal = bldgResY1 + eqResY1;
+        else if (yearIndex === 2) resVal = bldgResY2 + eqResY2;
+        else resVal = bldgResY3 + eqResY3;
+        
+        const repairCost = resVal * 0.03; // ค่าบำรุงรักษาคิดที่ 4%
+
+        return labor + utilities + toolsCost + repairCost + insurancePremium + num(landTax);
+      };
+
+      // --- คำนวณราคากลางค่าเช่าปีที่ 1 (Base Rent X) ---
+      const baseRentX = useMemo(() => {
+        const r = num(discountRate) / 100;
+        const g = escalationRate;
+
+        if (calcMode === 'MODE1') {
+          // MODE 1: คำนวณราคากลาง X จากเป้าหมายเดือนที่ต้องการให้ NPV = 0
+          const M = Math.max(1, Math.min(36, num(breakEvenMonths)));
+          const slaughterTax = calcSlaughterTax(1.0);
+          const nonRentRev = slaughterTax + num(landTax);
+          const netNonRentCF = nonRentRev - muniAnnualOpExp;
+
+          let sumDiscountedNonRent = 0;
+          let sumDiscountedRentFactor = 0;
+
+          // คำนวณคิดลดเป็นรายเดือนจนถึงเดือนที่ M
+          for (let m = 1; m <= M; m++) {
+            let yrIdx = Math.ceil(m / 12); // 1, 2, 3
+            let rentEscalationFactor = Math.pow(1 + g, yrIdx - 1);
+            let df_m = 1 / Math.pow(1 + r, m / 12);
+
+            sumDiscountedNonRent += (netNonRentCF / 12) * df_m;
+            sumDiscountedRentFactor += (rentEscalationFactor / 12) * df_m;
+          }
+
+          if (sumDiscountedRentFactor <= 0) return 0;
+          const requiredX = (totalInvestY0 - sumDiscountedNonRent) / sumDiscountedRentFactor;
+          return Math.max(0, requiredX);
+
+        } else {
+          // MODE 2: คำนวณจาก % ส่วนแบ่งกำไรดำเนินงานเอกชน
+          const pRev = calcPrivRevenue(1.0);
+          const pExpNoRent = calcPrivOpExp(1, 1.0);
+          const pProfitBeforeRent = Math.max(0, pRev - pExpNoRent);
+          
+          const netProfitFactor = pProfitBeforeRent / (1 + 0.001); 
+          const rentX = netProfitFactor * (num(profitSharePct) / 100);
+          return Math.max(0, rentX);
+        }
+      }, [calcMode, breakEvenMonths, profitSharePct, totalInvestY0, muniAnnualOpExp, pigCount, cattleCount, landTax, discountRate, escalationRate, laborSlaughter, laborVet, laborClean, elecCost, waterCost, envCleanCost, bldgResY1, eqResY1, insurancePremium]);
+
+      // --- Model Engine ---
+      const runFinancialModel = (animalScale = 1.0) => {
+        const g = escalationRate;
+        const r = num(discountRate) / 100;
+
+        const rentY1 = baseRentX;
+        const rentY2 = baseRentX * (1 + g);
+        const rentY3 = baseRentX * Math.pow(1 + g, 2);
+
+        const stampY1 = rentY1 / 1000;
+        const stampY2 = rentY2 / 1000;
+        const stampY3 = rentY3 / 1000;
+
+        // 1. Municipal Side
+        const slaughterTax = calcSlaughterTax(animalScale);
+        
+        const mRevY1 = rentY1 + slaughterTax + num(landTax);
+        const mRevY2 = rentY2 + slaughterTax + num(landTax);
+        const mRevY3 = rentY3 + slaughterTax + num(landTax);
+
+        const mExpY1 = muniAnnualOpExp;
+        const mExpY2 = muniAnnualOpExp;
+        const mExpY3 = muniAnnualOpExp;
+
+        const mNetY1 = mRevY1 - mExpY1;
+        const mNetY2 = mRevY2 - mExpY2;
+        const mNetY3 = mRevY3 - mExpY3;
+
+        const mCashFlows = [-totalInvestY0, mNetY1, mNetY2, mNetY3];
+        const mNPV = calcNPV(r, mCashFlows);
+        const mIRR = calcIRR(mCashFlows);
+        const mPI = calcPI(r, totalInvestY0, [mNetY1, mNetY2, mNetY3]);
+        const mPayback = calcPayback(totalInvestY0, [mNetY1, mNetY2, mNetY3]);
+
+        // 2. Private Side
+        const pRevAnnual = calcPrivRevenue(animalScale);
+
+        const pExpNoRentY1 = calcPrivOpExp(1, animalScale);
+        const pExpNoRentY2 = calcPrivOpExp(2, animalScale);
+        const pExpNoRentY3 = calcPrivOpExp(3, animalScale);
+
+        const pExpTotalY1 = pExpNoRentY1 + rentY1 + stampY1;
+        const pExpTotalY2 = pExpNoRentY2 + rentY2 + stampY2;
+        const pExpTotalY3 = pExpNoRentY3 + rentY3 + stampY3;
+
+        const pNetY1 = pRevAnnual - pExpTotalY1;
+        const pNetY2 = pRevAnnual - pExpTotalY2;
+        const pNetY3 = pRevAnnual - pExpTotalY3;
+
+        const pCashFlows = [0, pNetY1, pNetY2, pNetY3];
+        const pNPV = calcNPV(r, pCashFlows);
+        const pIRR = calcIRR(pCashFlows);
+
+        return {
+          rents: [rentY1, rentY2, rentY3],
+          muni: {
+            rev: [mRevY1, mRevY2, mRevY3],
+            exp: [mExpY1, mExpY2, mExpY3],
+            net: [mNetY1, mNetY2, mNetY3],
+            sum3Y: mNetY1 + mNetY2 + mNetY3,
+            npv: mNPV,
+            irr: mIRR,
+            pi: mPI,
+            payback: mPayback
+          },
+          priv: {
+            rev: [pRevAnnual, pRevAnnual, pRevAnnual],
+            exp: [pExpTotalY1, pExpTotalY2, pExpTotalY3],
+            net: [pNetY1, pNetY2, pNetY3],
+            sum3Y: pNetY1 + pNetY2 + pNetY3,
+            npv: pNPV,
+            irr: pIRR
+          }
+        };
+      };
+
+      const baseData = useMemo(() => runFinancialModel(1.0), [baseRentX, escalationRate, discountRate, totalInvestY0, muniAnnualOpExp, pigCount, cattleCount, pigServiceFee, cattleServiceFee, landTax, laborSlaughter, laborVet, laborClean, elecCost, waterCost, envCleanCost, bldgResY1, bldgResY2, bldgResY3, eqResY1, eqResY2, eqResY3, insurancePremium]);
+
+      const sensData = useMemo(() => runFinancialModel(1.0 - (num(sensDropPct) / 100)), [baseRentX, escalationRate, discountRate, totalInvestY0, muniAnnualOpExp, pigCount, cattleCount, pigServiceFee, cattleServiceFee, landTax, laborSlaughter, laborVet, laborClean, elecCost, waterCost, envCleanCost, bldgResY1, bldgResY2, bldgResY3, eqResY1, eqResY2, eqResY3, insurancePremium, sensDropPct]);
+
+      // ชุดข้อมูลกระแสเงินสดสะสมรายเดือนสำหรับกราฟ
+      const muniBaseCFMonthly = useMemo(() => genMonthlyCumCF(totalInvestY0, baseData.muni.net[0], baseData.muni.net[1], baseData.muni.net[2]), [totalInvestY0, baseData.muni.net]);
+      const privBaseCFMonthly = useMemo(() => genMonthlyCumCF(0, baseData.priv.net[0], baseData.priv.net[1], baseData.priv.net[2]), [baseData.priv.net]);
+      const muniSensCFMonthly = useMemo(() => genMonthlyCumCF(totalInvestY0, sensData.muni.net[0], sensData.muni.net[1], sensData.muni.net[2]), [totalInvestY0, sensData.muni.net]);
+      const privSensCFMonthly = useMemo(() => genMonthlyCumCF(0, sensData.priv.net[0], sensData.priv.net[1], sensData.priv.net[2]), [sensData.priv.net]);
+
+      // Export CSV Function
+      const exportCSV = () => {
+        let csv = '\uFEFF';
+        csv += 'GENERIC SLH ANALYZE - ความเป็นไปได้ทางการเงินของโครงการประมูลเช่าโรงฆ่าสัตว์\n';
+        csv += `โหมดการคำนวณ,${calcMode === 'MODE1' ? `คุ้มทุน NPV=0 ใน ${breakEvenMonths} เดือน` : `ส่วนแบ่งกำไร ${profitSharePct}%`}\n`;
+        csv += `ราคากลางค่าเช่าปีที่ 1 (ตัวแปร X),${baseRentX.toFixed(2)},บาท/ปี\n`;
+        csv += `อัตราการเพิ่มค่าเช่า (ปี 2-3),${(escalationRate * 100).toFixed(2)},%\n\n`;
+
+        csv += 'รายการ,Base Case - ปี 1,Base Case - ปี 2,Base Case - ปี 3,Base Case - รวม 3 ปี,Base Case - NPV,Sensitivity Case - ปี 1,Sensitivity Case - ปี 2,Sensitivity Case - ปี 3,Sensitivity Case - รวม 3 ปี,Sensitivity Case - NPV\n';
+
+        csv += `เทศบาล - รายได้รวม,${baseData.muni.rev[0]},${baseData.muni.rev[1]},${baseData.muni.rev[2]},${baseData.muni.rev.reduce((a,b)=>a+b,0)},-,${sensData.muni.rev[0]},${sensData.muni.rev[1]},${sensData.muni.rev[2]},${sensData.muni.rev.reduce((a,b)=>a+b,0)},-\n`;
+        csv += `เทศบาล - รายจ่ายรวม,${baseData.muni.exp[0]},${baseData.muni.exp[1]},${baseData.muni.exp[2]},${baseData.muni.exp.reduce((a,b)=>a+b,0)},-,${sensData.muni.exp[0]},${sensData.muni.exp[1]},${sensData.muni.exp[2]},${sensData.muni.exp.reduce((a,b)=>a+b,0)},-\n`;
+        csv += `เทศบาล - กระแสเงินสดสุทธิ,${baseData.muni.net[0]},${baseData.muni.net[1]},${baseData.muni.net[2]},${baseData.muni.sum3Y},${baseData.muni.npv},${sensData.muni.net[0]},${sensData.muni.net[1]},${sensData.muni.net[2]},${sensData.muni.sum3Y},${sensData.muni.npv}\n`;
+
+        csv += `เอกชน - รายได้รวม,${baseData.priv.rev[0]},${baseData.priv.rev[1]},${baseData.priv.rev[2]},${baseData.priv.rev.reduce((a,b)=>a+b,0)},-,${sensData.priv.rev[0]},${sensData.priv.rev[1]},${sensData.priv.rev[2]},${sensData.priv.rev.reduce((a,b)=>a+b,0)},-\n`;
+        csv += `เอกชน - รายจ่ายรวม,${baseData.priv.exp[0]},${baseData.priv.exp[1]},${baseData.priv.exp[2]},${baseData.priv.exp.reduce((a,b)=>a+b,0)},-,${sensData.priv.exp[0]},${sensData.priv.exp[1]},${sensData.priv.exp[2]},${sensData.priv.exp.reduce((a,b)=>a+b,0)},-\n`;
+        csv += `เอกชน - กระแสเงินสดสุทธิ,${baseData.priv.net[0]},${baseData.priv.net[1]},${baseData.priv.net[2]},${baseData.priv.sum3Y},${baseData.priv.npv},${sensData.priv.net[0]},${sensData.priv.net[1]},${sensData.priv.net[2]},${sensData.priv.sum3Y},${sensData.priv.npv}\n`;
+
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'GEN_SLH_ANALYZE_Report.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      };
+
+      // Export PDF Function
+      const exportPDF = () => {
+        const element = document.getElementById('report-dashboard-content');
+        const opt = {
+          margin:       0.3,
+          filename:     'GEN_SLH_ANALYZE_Financial_Report.pdf',
+          image:        { type: 'jpeg', quality: 0.98 },
+          html2canvas:  { scale: 2, useCORS: true },
+          jsPDF:        { unit: 'in', format: 'a4', orientation: 'landscape' }
+        };
+        html2pdf().set(opt).from(element).save();
+      };
+
+      return (
+        <div className="flex flex-col h-full bg-slate-100">
+          
+          {/* Header Bar */}
+          <header className="bg-brand-900 text-white shadow-md z-10 px-6 py-3.5 flex justify-between items-center shrink-0 border-b border-brand-800">
+            <div className="flex items-center gap-3">
+              <div className="bg-brand-50 text-brand-900 font-extrabold text-xs px-2.5 py-1 rounded tracking-wider uppercase shadow-sm">
+                GEN SLH ANALYZE
+              </div>
+              <div>
+                <h1 className="text-lg font-bold leading-tight">ระบบวิเคราะห์ราคากลาง (ค่าเช่า) และแบบจำลองทางการเงินโครงการประมูลเช่าโรงฆ่าสัตว์</h1>
+                <p className="text-xs text-brand-100">ตามระเบียบกระทรวงมหาดไทย ว่าด้วยการหาประโยชน์ในทรัพย์สินของ อปท. พ.ศ.2543</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2.5">
+              {/* === เพิ่มปุ่ม FFS 3 ปี ตรงนี้ === */}
+              <a 
+                href="https://your-target-url-here.com" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="bg-emerald-800 hover:bg-emerald-600 text-white px-3.5 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1.5 shadow-sm"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                </svg>
+                ไปที่ SLH-FFS 5 ปี
+              </a>
+              {/* ============================== */}
+              <button 
+                onClick={exportCSV}
+                className="bg-slate-700 hover:bg-slate-600 text-white px-3.5 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1.5 shadow-sm"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                Export CSV
+              </button>
+              <button 
+                onClick={exportPDF}
+                className="bg-brand-500 hover:bg-brand-600 text-white px-3.5 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1.5 shadow-sm"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+                พิมพ์ / Export PDF
+              </button>
+            </div>
+          </header>
+
+          {/* Main Content Layout */}
+          <div className="flex flex-1 overflow-hidden">
+            
+            {/* LEFT SIDEBAR - Parameter Controls */}
+            <div className="w-1/3 min-w-[380px] max-w-[460px] bg-white border-r border-slate-200 overflow-y-auto custom-scroll p-5 shadow-sm z-0">
+              <div className="flex items-center justify-between mb-4 pb-2 border-b">
+                <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                  <svg className="w-5 h-5 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+                  การตั้งค่าพารามิเตอร์โครงการ
+                </h2>
+                <span className="text-[11px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded">ปรับแต่งอิสระ</span>
+              </div>
+
+              <div className="space-y-5">
+                
+                {/* 1. Calculate Mode & Options */}
+                <section className="bg-brand-50/60 border border-brand-200 rounded-xl p-4">
+                  <h3 className="font-bold text-brand-900 text-xs uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
+                    <svg className="w-4 h-4 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 7hr6m-6 4h6m-6 4h6M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    เลือกวิธีการคำนวณ (Select Calculate Mode)
+                  </h3>
+
+                  <div className="grid grid-cols-2 gap-2 mb-3">
+                    <button
+                      onClick={() => setCalcMode('MODE1')}
+                      className={`px-3 py-2 text-xs font-semibold rounded-lg border text-left transition ${calcMode === 'MODE1' ? 'bg-brand-600 text-white border-brand-600 shadow-sm' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}
+                    >
+                      1) มีการลงทุนในปีที่ 0
+                      <span className="block text-[10px] font-normal opacity-80">กำหนดเดือนจุดคุ้มทุน (NPV=0)</span>
+                    </button>
+                    <button
+                      onClick={() => setCalcMode('MODE2')}
+                      className={`px-3 py-2 text-xs font-semibold rounded-lg border text-left transition ${calcMode === 'MODE2' ? 'bg-brand-600 text-white border-brand-600 shadow-sm' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'}`}
+                    >
+                      2) ไม่มีการลงทุนในปีที่ 0
+                      <span className="block text-[10px] font-normal opacity-80">คำนวณจาก % ส่วนแบ่งกำไร</span>
+                    </button>
+                  </div>
+
+                  {/* Mode 1 Control: กำหนดเดือนที่ต้องการให้ NPV=0 ได้อย่างอิสระ */}
+                  {calcMode === 'MODE1' && (
+                    <div className="bg-blue-50 p-3.5 rounded-lg border border-brand-200 mb-3 space-y-2.5">
+                      <div className="flex justify-between items-center">
+                        <label className="text-xs font-semibold text-slate-800">
+                          เดือนที่ต้องการให้คุ้มทุน (NPV = 0)
+                        </label>
+                        <span className="text-xs font-bold bg-brand-100 text-brand-800 px-2.5 py-1 rounded-md border border-brand-300">
+                          เดือนที่ {breakEvenMonths} ({Math.floor(breakEvenMonths / 12) > 0 ? `${Math.floor(breakEvenMonths / 12)} ปี ` : ''}{breakEvenMonths % 12} เดือน)
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <input 
+                          type="range" 
+                          min="1" 
+                          max="36" 
+                          step="1" 
+                          value={breakEvenMonths} 
+                          onChange={(e) => setBreakEvenMonths(Math.max(1, Math.min(36, Number(e.target.value))))} 
+                          className="w-full h-2 bg-brand-200 rounded-lg appearance-none cursor-pointer accent-brand-600 flex-1" 
+                        />
+                        <input 
+                          type="number" 
+                          min="1" 
+                          max="36" 
+                          value={breakEvenMonths} 
+                          onChange={(e) => {
+                            let v = parseInt(e.target.value) || 1;
+                            if (v < 1) v = 1;
+                            if (v > 36) v = 36;
+                            setBreakEvenMonths(v);
+                          }} 
+                          className="w-16 border rounded text-center text-xs font-bold py-1 border-brand-400 focus:ring-1 focus:ring-brand-500"
+                        />
+                        <span className="text-xs text-slate-600 font-medium">เดือน</span>
+                      </div>
+
+                      {/* ปุ่มลัดเลือกเดือนยอดนิยม */}
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {[6, 12, 18, 24, 30, 36].map((m) => (
+                          <button
+                            key={m}
+                            type="button"
+                            onClick={() => setBreakEvenMonths(m)}
+                            className={`text-[11px] px-2 py-0.5 rounded border transition ${
+                              breakEvenMonths === m
+                                ? 'bg-brand-600 text-white border-brand-600 font-semibold'
+                                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            {m === 36 ? '36 เดือน (3 ปี)' : m === 24 ? '24 เดือน (2 ปี)' : m === 12 ? '12 เดือน (1 ปี)' : `${m} เดือน`}
+                          </button>
+                        ))}
+                      </div>
+
+                      <p className="text-[10px] text-slate-700 leading-normal pt-0.5">
+                        *คำนวณค่าเช่าปีที่ 1 (ราคากลาง) อัตโนมัติ เพื่อให้คืนทุน (NPV=0) ในเดือนที่กำหนด
+                      </p>
+                    </div>
+                  )}
+
+                  {calcMode === 'MODE2' && (
+                    <div className="bg-sky-50 p-3 rounded-lg border border-slate-200 mb-3">
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="text-xs font-semibold text-slate-700">แบ่งส่วนค่าเช่าจากกำไรก่อนหักภาษีเงินได้ (%):</label>
+                        <span className="text-xs font-bold bg-brand-100 text-brand-800 px-2 py-0.5 rounded">{profitSharePct}%</span>
+                      </div>
+                      <input 
+                        type="range" min="0" max="100" step="1" 
+                        value={profitSharePct} 
+                        onChange={(e) => setProfitSharePct(Number(e.target.value))} 
+                        className="w-full h-1.5 bg-brand-200 rounded-lg appearance-none cursor-pointer accent-brand-600" 
+                      />
+                      <p className="text-[10px] text-slate-500 mt-1">*คิดค่าเช่า (X) จาก {profitSharePct}% ของกำไรจากการดำเนินงานของผู้เช่าก่อนหักค่าเช่า</p>
+                    </div>
+                  )}
+
+                  <label className="flex items-center gap-2.5 cursor-pointer pt-1">
+                    <input 
+                      type="checkbox" 
+                      checked={includeDeprec} 
+                      onChange={(e) => setIncludeDeprec(e.target.checked)} 
+                      className="w-4 h-4 text-brand-600 rounded border-slate-300 focus:ring-brand-500"
+                    />
+                    <span className="text-xs font-medium text-slate-700">นำค่าเสื่อมราคา (ต้นทุนทางบัญชี) มาร่วมคำนวณ</span>
+                  </label>
+                </section>
+
+                {/* 2. Asset Inputs */}
+                <section>
+                  <h3 className="font-bold text-slate-700 text-xs border-b pb-1.5 mb-2.5 uppercase tracking-wider">1. ข้อมูลทรัพย์สิน (อสังหาริมทรัพย์ | ครุภัณฑ์)</h3>
+                  
+                  {/* Building */}
+                  <div className="bg-slate-50 p-3 rounded-lg mb-2.5 border border-slate-200">
+                    <div className="text-xs font-bold text-brand-700 mb-2">1.1 อาคารโรงฆ่าสัตว์และอาคารประกอบ</div>
+                    <div className="grid grid-cols-2 gap-2 mb-2">
+                      <div>
+                        <label className="text-[11px] text-slate-500 block">วันที่ได้มา</label>
+                        <input type="date" value={bldgDate} onChange={e=>setBldgDate(e.target.value)} className="w-full border rounded px-2 py-1 text-xs"/>
+                      </div>
+                      <div>
+                        <label className="text-[11px] text-slate-500 block">ราคาทุน (บาท) *มูลค่าคงเหลือ=1 กรอก 0</label>
+                        <input type="number" value={bldgVal} onChange={e=>setBldgVal(e.target.value)} className="w-full border rounded px-2 py-1 text-xs"/>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-[11px]">
+                      <div>
+                        <span className="text-slate-500 block">อายุใช้งาน (ปี)</span>
+                        <input type="number" value={bldgLife} onChange={e=>setBldgLife(e.target.value)} className="w-full border rounded px-1.5 py-0.5 text-xs font-semibold text-brand-700"/>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block">* ค่าเสื่อมราคา/ปี (บาท)</span>
+                        <div className="font-semibold text-slate-700 mt-1">{fmt(bldgDeprec)}</div>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block">มูลค่าคงเหลือ (บาท)</span>
+                        <div className="font-semibold text-slate-700 mt-1">{fmt(bldgResY1)}</div>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-1.5">* คำนวณค่าเสื่อมราคาแบบเส้นตรงอายุการใช้งานอย่างมีประสิทธิภาพ = {bldgLife} ปี</p>
+                  </div>
+
+                  {/* Machinery */}
+                  <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                    <div className="text-xs font-bold text-brand-700 mb-2">1.2 เครื่องจักรอุปกรณ์</div>
+                    <div className="grid grid-cols-2 gap-2 mb-2">
+                      <div>
+                        <label className="text-[11px] text-slate-500 block">วันที่ได้มา</label>
+                        <input type="date" value={eqDate} onChange={e=>setEqDate(e.target.value)} className="w-full border rounded px-2 py-1 text-xs"/>
+                      </div>
+                      <div>
+                        <label className="text-[11px] text-slate-500 block">ราคาทุน (บาท) มูลค่าคงเหลือ=1 กรอก 0 | ใช้ราคาเครื่องจักรใหม่จากข้อ 3.</label>
+                        <input type="number" value={eqVal} onChange={e=>setEqVal(e.target.value)} className="w-full border rounded px-2 py-1 text-xs"/>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-[11px]">
+                      <div>
+                        <span className="text-slate-500 block">อายุใช้งาน (ปี)</span>
+                        <input type="number" value={eqLife} onChange={e=>setEqLife(e.target.value)} className="w-full border rounded px-1.5 py-0.5 text-xs"/>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block">ค่าเสื่อมราคา/ปี (บาท)</span>
+                        <div className="font-semibold text-slate-700 mt-1">{fmt(eqDeprec)}</div>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block">มูลค่าคงเหลือ (บาท)</span>
+                        <div className="font-semibold text-slate-700 mt-1">{fmt(eqResY1+1.00)}</div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                {/* 3. Animal Statistics & Fees */}
+                <section>
+                  <h3 className="font-bold text-slate-700 text-xs border-b pb-1.5 mb-2.5 uppercase tracking-wider">2. จำนวนสัตว์และอัตราค่าบริการ</h3>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                      <div className="text-xs font-bold text-slate-700 mb-1.5">สุกร</div>
+                      <div className="space-y-1.5">
+                        <div>
+                          <label className="text-[10px] text-slate-500 block">จำนวนเฉลี่ย (ตัว/ปี)</label>
+                          <input type="number" value={pigCount} onChange={e=>setPigCount(e.target.value)} className="w-full border rounded px-2 py-0.5 text-xs"/>
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-slate-500 block">อัตราค่าบริการ (บาท/ตัว)</label>
+                          <input type="number" value={pigServiceFee} onChange={e=>setPigServiceFee(e.target.value)} className="w-full border rounded px-2 py-0.5 text-xs"/>
+                        </div>
+                        <div className="text-[10px] text-slate-500 pt-0.5">
+                          อากรฆ่าสัตว์: <span className="font-bold text-slate-700">15 บาท/ตัว</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                      <div className="text-xs font-bold text-slate-700 mb-1.5">โค-กระบือ (Cattle)</div>
+                      <div className="space-y-1.5">
+                        <div>
+                          <label className="text-[10px] text-slate-500 block">จำนวนเฉลี่ย (ตัว/ปี)</label>
+                          <input type="number" value={cattleCount} onChange={e=>setCattleCount(e.target.value)} className="w-full border rounded px-2 py-0.5 text-xs"/>
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-slate-500 block">อัตราค่าบริการ (บาท/ตัว)</label>
+                          <input type="number" value={cattleServiceFee} onChange={e=>setCattleServiceFee(e.target.value)} className="w-full border rounded px-2 py-0.5 text-xs"/>
+                        </div>
+                        <div className="text-[10px] text-slate-500 pt-0.5">
+                          อากรฆ่าสัตว์: <span className="font-bold text-slate-700">20 บาท/ตัว</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                {/* 4. Municipal Costs */}
+                <section>
+                  <h3 className="font-bold text-slate-700 text-xs border-b pb-1.5 mb-2.5 uppercase tracking-wider">3. เงินลงทุน | ต้นทุน ของเทศบาล</h3>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="col-span-2 text-[11px] font-bold text-brand-700">เงินลงทุนปีที่ 0 (ก่อนการประมูล)</div>
+                    <div>
+                      <label className="text-[10px] text-slate-500 block">ค่าปรับปรุงอาคาร (บาท)</label>
+                      <input type="number" value={investBldg} onChange={e=>setInvestBldg(e.target.value)} className="w-full border rounded px-2 py-1"/>
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-500 block">ค่าจัดหาเครื่องจักรใหม่ (บาท)</label>
+                      <input type="number" value={investEq} onChange={e=>setInvestEq(e.target.value)} className="w-full border rounded px-2 py-1"/>
+                    </div>
+
+                    <div className="col-span-2 text-[11px] font-bold text-brand-700 mt-1">ค่าใช้จ่ายบริหารและกำกับดูแลต่อปี (บาท)</div>
+                    <div>
+                      <label className="text-[10px] text-slate-500 block">ค่าใช้จ่ายอื่น การจัดประมูล ประสานงาน (บาท)</label>
+                      <input type="number" value={auctionCost} disabled className="w-full border rounded px-2 py-1 bg-slate-100 text-slate-500"/>
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-500 block">ค่ารับตรวจประเมิน 2 ครั้ง (บาท/ปี)</label>
+                      <input type="number" value={inspectCost} disabled className="w-full border rounded px-2 py-1 bg-slate-100 text-slate-500"/>
+                    </div>
+                    <div className="col-span-2">
+                      <label className="text-[10px] text-slate-500 block">ค่าตรวจวิเคราะห์คุณภาพน้ำ 2 ครั้ง/ปี (บาท)</label>
+                      <input type="number" value={waterTestCost} onChange={e=>setWaterTestCost(e.target.value)} className="w-full border rounded px-2 py-1"/>
+                    </div>
+                  </div>
+                </section>
+
+                {/* 5. Private Costs */}
+                <section>
+                  <h3 className="font-bold text-slate-700 text-xs border-b pb-1.5 mb-2.5 uppercase tracking-wider">4. ต้นทุนและค่าใช้จ่ายของเอกชน (ต่อปี)</h3>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <label className="text-[10px] text-slate-500 block">ค่าจ้างพนักงานฆ่าสัตว์ (บาท/ปี)</label>
+                      <input type="number" value={laborSlaughter} onChange={e=>setLaborSlaughter(e.target.value)} className="w-full border rounded px-2 py-1"/>
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-500 block">ค่าจ้างพนักงานตรวจโรคสัตว์ (บาท/ปี)</label>
+                      <input type="number" value={laborVet} onChange={e=>setLaborVet(e.target.value)} className="w-full border rounded px-2 py-1"/>
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-500 block">ค่าจ้างเสมียน+พนักงานทำความสะอาด (บาท/ปี)</label>
+                      <input type="number" value={laborClean} onChange={e=>setLaborClean(e.target.value)} className="w-full border rounded px-2 py-1"/>
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-500 block">ค่าไฟฟ้า (บาท/ปี)</label>
+                      <input type="number" value={elecCost} onChange={e=>setElecCost(e.target.value)} className="w-full border rounded px-2 py-1"/>
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-500 block">ค่าปรับปรุงคุณภาพน้ำ soft+Disinfect (บาท/ปี)</label>
+                      <input type="number" value={waterCost} onChange={e=>setWaterCost(e.target.value)} className="w-full border rounded px-2 py-1"/>
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-500 block">ค่าจัดการสิ่งแวดล้อม (บาท/ปี)</label>
+                      <input type="number" value={envCleanCost} onChange={e=>setEnvCleanCost(e.target.value)} className="w-full border rounded px-2 py-1"/>
+                    </div>
+                    <div className="col-span-2 grid grid-cols-2 gap-2 pt-1">
+                      <div>
+                        <label className="text-[10px] text-slate-500 block">ทุนประกันภัย (บาท)</label>
+                        <input type="number" value={sumInsured} onChange={e=>setSumInsured(e.target.value)} className="w-full border rounded px-2 py-1"/>
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-slate-500 block">เบี้ยประกัน (บาท/ปี)</label>
+                        <div className="font-semibold text-slate-700 mt-1">{fmt(insurancePremium)} บ.</div>
+                      </div>
+                    </div>
+                    <div className="col-span-2">
+                      <label className="text-[10px] text-slate-500 block">ภาษีที่ดินและสิ่งปลูกสร้าง (บาท/ปี)</label>
+                      <input type="number" value={landTax} onChange={e=>setLandTax(e.target.value)} className="w-full border rounded px-2 py-1"/>
+                    </div>
+                  </div>
+                </section>
+
+                {/* 6. Macro & Sensitivity */}
+                <section className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                  <h3 className="font-bold text-slate-700 text-xs mb-2 flex justify-between items-center">
+                    <span>5. วิเคราะห์ความอ่อนไหว & ตัวแปรทางเศรษฐกิจ</span>
+                  </h3>
+
+                  <div className="mb-3 bg-white p-2.5 rounded-lg border border-slate-200">
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="text-xs font-semibold text-red-600">จำนวนสัตว์ลดลง (Sensitivity, %):</label>
+                      <span className="text-xs font-bold bg-red-100 text-red-700 px-2 py-0.5 rounded">-{sensDropPct}%</span>
+                    </div>
+                    <input 
+                      type="range" min="0" max="50" step="1" 
+                      value={sensDropPct} 
+                      onChange={(e) => setSensDropPct(Number(e.target.value))} 
+                      className="w-full h-1.5 bg-red-100 rounded-lg appearance-none cursor-pointer accent-red-600" 
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 text-[10px]">
+                    <div>
+                      <label className="text-slate-500 block">Avg.Inflation 3 ปี (%)</label>
+                      <input type="number" step="0.1" value={inflationRate} onChange={e=>setInflationRate(e.target.value)} className="w-full border rounded px-1.5 py-0.5"/>
+                    </div>
+                    <div>
+                      <label className="text-slate-500 block">12-m dep.rate (%)</label>
+                      <input type="number" step="0.1" value={oppCostRate} onChange={e=>setOppCostRate(e.target.value)} className="w-full border rounded px-1.5 py-0.5"/>
+                    </div>
+                    <div>
+                      <label className="text-slate-500 block">Discount (%)</label>
+                      <input type="number" step="0.1" value={discountRate} onChange={e=>setDiscountRate(e.target.value)} className="w-full border rounded px-1.5 py-0.5"/>
+                    </div>
+                  </div>
+                </section>
+
+              </div>
+            </div>
+
+            {/* RIGHT DASHBOARD - Analysis & Presentation Area */}
+            <div className="flex-1 overflow-y-auto custom-scroll p-6 bg-slate-100" id="report-dashboard-content">
+              
+              {/* Header Title for Report / PDF */}
+              <div className="mb-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex justify-between items-center">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-800">ผลการศึกษาความเป็นไปได้ทางการเงิน (Financial Feasibility Study 3 ปี)</h2>
+                  <p className="text-xs text-slate-500">โครงการให้เอกชนประมูลเช่าโรงฆ่าสัตว์ ระยะเวลาสัญญา 3 ปี | เทศบาลตำบลนากลาง</p>
+                </div>
+                <div className="text-right text-xs text-slate-500">
+                  <div>โหมดการคำนวณ: <span className="font-bold text-brand-700">{calcMode === 'MODE1' ? `คุ้มทุน NPV=0 ใน ${breakEvenMonths} เดือน` : `ส่วนแบ่งกำไร ${profitSharePct}%`}</span></div>
+                  <div>ค่าเสื่อมราคาอาคาร: <span className="font-bold text-slate-700">เส้นตรง ({bldgLife} ปี)</span></div>
+                </div>
+              </div>
+
+              {/* Top KPI Metric Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                
+                {/* Rent X (Main Highlight) */}
+                <div className="bg-gradient-to-br from-brand-700 to-brand-900 text-white rounded-xl p-4 shadow-md col-span-1 md:col-span-2 relative overflow-hidden">
+                  <div className="absolute right-[-10px] bottom-[-10px] opacity-10 text-white">
+                    <svg className="w-32 h-32" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 14h-2v-2h2v2zm0-4h-2V7h2v5z"/></svg>
+                  </div>
+                  <div className="text-sm font-semibold text-brand-100 uppercase tracking-wider mb-1">ราคากลางค่าเช่าปีที่ 1 (ตัวแปร X)</div>
+                  <div className="flex items-center justify-center text-3xl font-extrabold">{fmt(baseRentX)} <span className="text-sm font-normal text-brand-100">&nbsp;&nbsp;บาท/ปี</span></div>
+                  
+                  <div className="mt-3 pt-2 border-t border-brand-600/50 flex justify-between text-xs text-brand-100">
+                    <div>ค่าเช่าปีที่ 2: <span className="font-bold text-white">{fmt(baseData.rents[1])}</span> บ.</div>
+                    <div>ค่าเช่าปีที่ 3: <span className="font-bold text-white">{fmt(baseData.rents[2])}</span> บ.</div>
+                    <div>อัตราก้าวหน้า: <span className="font-bold text-emerald-300">{(escalationRate * 100).toFixed(2)}%</span>/ปี</div>
+                  </div>
+                </div>
+
+                {/* Muni NPV */}
+                <div className="bg-white border-l-4 border-brand-500 rounded-xl p-4 shadow-sm">
+                  <div className="text-xs font-semibold text-slate-700 mb-1">NPV (เทศบาล - Base)</div>
+                  <div className={`flex items-center justify-center text-xl font-bold ${baseData.muni.npv >= 0 ? 'text-brand-600' : 'text-red-600'}`}>
+                    {fmt(baseData.muni.npv)} <span className="text-sm font-normal text-slate-400">&nbsp;&nbsp;บาท</span>
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-1"> Sensitivity: <span className={sensData.muni.npv>=0?'text-slate-600':'text-red-500'}>{fmt(sensData.muni.npv)}</span></div>
+                </div>
+
+                {/* Muni IRR & Payback */}
+                <div className="bg-white border-l-4 border-emerald-500 rounded-xl p-4 shadow-sm">
+                  <div className="text-xs font-semibold text-slate-700 mb-1">IRR & ระยะเวลาคืนทุน</div>
+                  <div className="flex items-center justify-center text-xl font-bold text-emerald-600">
+                    {baseData.muni.irr !== null ? `${baseData.muni.irr.toFixed(2)}%` : 'N/A'}
+                  </div>
+                  <div className="text-[14px] text-slate-700 mt-1">
+                    คืนทุนใน: <span className="font-bold text-slate-700">{baseData.muni.payback}</span>
+                  </div>
+                </div>
+
+                {/* Private 3Y Net Profit */}
+                <div className="bg-white border-l-4 border-indigo-500 rounded-xl p-4 shadow-sm">
+                  <div className="text-xs font-semibold text-slate-700 mb-1">กำไรสุทธิผู้เช่า 3 ปี (Base)</div>
+                  <div className={`flex items-center justify-center text-xl font-bold ${baseData.priv.sum3Y >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                    {fmt(baseData.priv.sum3Y)} <span className="text-sm font-normal text-slate-700">&nbsp;&nbsp;บาท</span>
+                  </div>
+                  <div className="text-[14px] text-slate-700 mt-1">เฉลี่ย {fmt(baseData.priv.sum3Y / 3)} บาท/ปี</div>
+                </div>
+
+                {/* Private Sensitivity Impact */}
+                <div className="bg-white border-l-4 border-rose-500 rounded-xl p-4 shadow-sm">
+                  <div className="text-xs font-semibold text-slate-500 mb-1">กำไรสุทธิผู้เช่า 3 ปี (สัตว์ลด {sensDropPct}%)</div>
+                  <div className={`flex items-center justify-center text-xl font-bold ${sensData.priv.sum3Y >= 0 ? 'text-rose-600' : 'text-red-600'}`}>
+                    {fmt(sensData.priv.sum3Y)} <span className="text-sm font-normal text-slate-600">&nbsp;&nbsp;บาท</span>
+                  </div>
+                  <div className="text-[14px] text-slate-700 mt-1">NPV ผู้เช่า: {fmt(sensData.priv.npv)} บาท</div>
+                </div>
+
+              </div>
+
+              {/* Interactive Financial Chart Component */}
+              <FinancialChart 
+                muniBaseCF={muniBaseCFMonthly}
+                privBaseCF={privBaseCFMonthly}
+                muniSensCF={muniSensCFMonthly}
+                privSensCF={privSensCFMonthly}
+                breakEvenMonths={breakEvenMonths}
+                calcMode={calcMode}
+              />
+
+              {/* Side-by-Side Comprehensive Financial Cash Flow Table */}
+              <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-slate-200 mb-6">
+                <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+                  <h2 className="font-bold text-slate-800 text-sm">ตารางเปรียบเทียบกระแสเงินสดและดัชนีทางการเงิน (Side-by-Side Analysis) เทศบาล vs ผู้เช่า</h2>
+                  <span className="text-xs text-slate-500">หน่วย: บาท</span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
+                        <th className="py-2.5 px-3 border-r min-w-[220px]">รายการ / กระแสเงินสด</th>
+                        <th className="py-2.5 px-2 border-r text-right bg-blue-50/50">ปีที่ 1</th>
+                        <th className="py-2.5 px-2 border-r text-right bg-blue-50/50">ปีที่ 2</th>
+                        <th className="py-2.5 px-2 border-r text-right bg-blue-50/50">ปีที่ 3</th>
+                        <th className="py-2.5 px-2 border-r text-right bg-blue-100/60 font-bold">รวม 3 ปี (Base)</th>
+                        <th className="py-2.5 px-2 border-r text-right bg-blue-100/60 font-bold">NPV (Base)</th>
+                        <th className="py-2.5 px-2 border-r text-right bg-rose-50 text-rose-800">รวม 3 ปี (-{sensDropPct}%)</th>
+                        <th className="py-2.5 px-2 text-right bg-rose-100 text-rose-900 font-bold">NPV (-{sensDropPct}%)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      
+                      {/* SECTION 1: MUNICIPALITY */}
+                      <tr className="bg-brand-50/80 font-bold text-brand-900">
+                        <td colSpan="8" className="py-2 px-3 border-r">1. เทศบาล (ผู้ให้เช่า)</td>
+                      </tr>
+                      
+                      <tr className="hover:bg-slate-50">
+                        <td className="py-2 px-3 border-r text-slate-600 pl-6">1.1 รายได้จากอากรฆ่าสัตว์</td>
+                        <td className="py-2 px-2 border-r text-right">{fmt(calcSlaughterTax(1.0))}</td>
+                        <td className="py-2 px-2 border-r text-right">{fmt(calcSlaughterTax(1.0))}</td>
+                        <td className="py-2 px-2 border-r text-right">{fmt(calcSlaughterTax(1.0))}</td>
+                        <td className="py-2 px-2 border-r text-right bg-blue-50/30">{fmt(calcSlaughterTax(1.0)*3)}</td>
+                        <td className="py-2 px-2 border-r text-right bg-blue-50/30">-</td>
+                        <td className="py-2 px-2 border-r text-right bg-rose-50/30">{fmt(calcSlaughterTax(1.0 - sensDropPct/100)*3)}</td>
+                        <td className="py-2 px-2 text-right bg-rose-50/30">-</td>
+                      </tr>
+
+                      <tr className="hover:bg-slate-50">
+                        <td className="py-2 px-3 border-r text-slate-600 pl-6">1.2 ภาษีที่ดินและสิ่งปลูกสร้าง</td>
+                        <td className="py-2 px-2 border-r text-right">{fmt(landTax)}</td>
+                        <td className="py-2 px-2 border-r text-right">{fmt(landTax)}</td>
+                        <td className="py-2 px-2 border-r text-right">{fmt(landTax)}</td>
+                        <td className="py-2 px-2 border-r text-right bg-blue-50/30">{fmt(landTax*3)}</td>
+                        <td className="py-2 px-2 border-r text-right bg-blue-50/30">-</td>
+                        <td className="py-2 px-2 border-r text-right bg-rose-50/30">{fmt(landTax*3)}</td>
+                        <td className="py-2 px-2 text-right bg-rose-50/30">-</td>
+                      </tr>
+
+                      <tr className="hover:bg-slate-50">
+                        <td className="py-2 px-3 border-r text-slate-600 pl-6 font-semibold">1.3 ค่าเช่าโรงฆ่าสัตว์ (ตัวแปร X)</td>
+                        <td className="py-2 px-2 border-r text-right font-semibold text-brand-700">{fmt(baseData.rents[0])}</td>
+                        <td className="py-2 px-2 border-r text-right font-semibold text-brand-700">{fmt(baseData.rents[1])}</td>
+                        <td className="py-2 px-2 border-r text-right font-semibold text-brand-700">{fmt(baseData.rents[2])}</td>
+                        <td className="py-2 px-2 border-r text-right bg-blue-50/30 font-bold">{fmt(baseData.rents[0]+baseData.rents[1]+baseData.rents[2])}</td>
+                        <td className="py-2 px-2 border-r text-right bg-blue-50/30">-</td>
+                        <td className="py-2 px-2 border-r text-right bg-rose-50/30 font-bold">{fmt(baseData.rents[0]+baseData.rents[1]+baseData.rents[2])}</td>
+                        <td className="py-2 px-2 text-right bg-rose-50/30">-</td>
+                      </tr>
+
+                      <tr className="hover:bg-slate-50 font-medium bg-slate-50/50">
+                        <td className="py-2 px-3 border-r text-slate-700 pl-4">รวมกระแสเงินสดรับ (เทศบาล)</td>
+                        <td className="py-2 px-2 border-r text-right">{fmt(baseData.muni.rev[0])}</td>
+                        <td className="py-2 px-2 border-r text-right">{fmt(baseData.muni.rev[1])}</td>
+                        <td className="py-2 px-2 border-r text-right">{fmt(baseData.muni.rev[2])}</td>
+                        <td className="py-2 px-2 border-r text-right bg-blue-50/50 font-bold">{fmt(baseData.muni.rev.reduce((a,b)=>a+b,0))}</td>
+                        <td className="py-2 px-2 border-r text-right bg-blue-50/50">-</td>
+                        <td className="py-2 px-2 border-r text-right bg-rose-50/50 font-bold">{fmt(sensData.muni.rev.reduce((a,b)=>a+b,0))}</td>
+                        <td className="py-2 px-2 text-right bg-rose-50/50">-</td>
+                      </tr>
+
+                      <tr className="hover:bg-slate-50">
+                        <td className="py-2 px-3 border-r text-slate-600 pl-4">หัก: ต้นทุนดำเนินงาน ({includeDeprec ? 'รวมค่าเสื่อมราคา' : 'ไม่รวมค่าเสื่อมราคา'})</td>
+                        <td className="py-2 px-2 border-r text-right text-red-500">({fmt(baseData.muni.exp[0])})</td>
+                        <td className="py-2 px-2 border-r text-right text-red-500">({fmt(baseData.muni.exp[1])})</td>
+                        <td className="py-2 px-2 border-r text-right text-red-500">({fmt(baseData.muni.exp[2])})</td>
+                        <td className="py-2 px-2 border-r text-right bg-blue-50/30 text-red-600">({fmt(baseData.muni.exp.reduce((a,b)=>a+b,0))})</td>
+                        <td className="py-2 px-2 border-r text-right bg-blue-50/30">-</td>
+                        <td className="py-2 px-2 border-r text-right bg-rose-50/30 text-red-600">({fmt(sensData.muni.exp.reduce((a,b)=>a+b,0))})</td>
+                        <td className="py-2 px-2 text-right bg-rose-50/30">-</td>
+                      </tr>
+
+                      <tr className="bg-brand-100/60 font-bold text-brand-900 border-t-2 border-brand-200">
+                        <td className="py-2.5 px-3 border-r pl-4">กระแสเงินสดสุทธิ เทศบาล (Net Cash Flow)</td>
+                        <td className="py-2.5 px-2 border-r text-right">{fmt(baseData.muni.net[0])}</td>
+                        <td className="py-2.5 px-2 border-r text-right">{fmt(baseData.muni.net[1])}</td>
+                        <td className="py-2.5 px-2 border-r text-right">{fmt(baseData.muni.net[2])}</td>
+                        <td className="py-2.5 px-2 border-r text-right bg-brand-200/50">{fmt(baseData.muni.sum3Y)}</td>
+                        <td className="py-2.5 px-2 border-r text-right bg-brand-300/60 text-brand-950">{fmt(baseData.muni.npv)}</td>
+                        <td className="py-2.5 px-2 border-r text-right bg-rose-100 text-rose-900">{fmt(sensData.muni.sum3Y)}</td>
+                        <td className="py-2.5 px-2 text-right bg-rose-200 text-rose-950">{fmt(sensData.muni.npv)}</td>
+                      </tr>
+
+                      {/* SECTION 2: PRIVATE */}
+                      <tr className="bg-emerald-50 font-bold text-emerald-900">
+                        <td colSpan="8" className="py-2 px-3 border-r">2. เอกชน (ผู้เช่า)</td>
+                      </tr>
+
+                      <tr className="hover:bg-slate-50">
+                        <td className="py-2 px-3 border-r text-slate-600 pl-4">2.1 รายได้จากการให้บริการฆ่าและชำแหละ</td>
+                        <td className="py-2 px-2 border-r text-right">{fmt(baseData.priv.rev[0])}</td>
+                        <td className="py-2 px-2 border-r text-right">{fmt(baseData.priv.rev[1])}</td>
+                        <td className="py-2 px-2 border-r text-right">{fmt(baseData.priv.rev[2])}</td>
+                        <td className="py-2 px-2 border-r text-right bg-blue-50/30">{fmt(baseData.priv.rev.reduce((a,b)=>a+b,0))}</td>
+                        <td className="py-2 px-2 border-r text-right bg-blue-50/30">-</td>
+                        <td className="py-2 px-2 border-r text-right bg-rose-50/30">{fmt(sensData.priv.rev.reduce((a,b)=>a+b,0))}</td>
+                        <td className="py-2 px-2 text-right bg-rose-50/30">-</td>
+                      </tr>
+
+                      <tr className="hover:bg-slate-50">
+                        <td className="py-2 px-3 border-r text-slate-600 pl-4">2.2 รายจ่ายการดำเนินงาน + ค่าเช่า + อากรแสตมป์</td>
+                        <td className="py-2 px-2 border-r text-right text-red-500">({fmt(baseData.priv.exp[0])})</td>
+                        <td className="py-2 px-2 border-r text-right text-red-500">({fmt(baseData.priv.exp[1])})</td>
+                        <td className="py-2 px-2 border-r text-right text-red-500">({fmt(baseData.priv.exp[2])})</td>
+                        <td className="py-2 px-2 border-r text-right bg-blue-50/30 text-red-600">({fmt(baseData.priv.exp.reduce((a,b)=>a+b,0))})</td>
+                        <td className="py-2 px-2 border-r text-right bg-blue-50/30">-</td>
+                        <td className="py-2 px-2 border-r text-right bg-rose-50/30 text-red-600">({fmt(sensData.priv.exp.reduce((a,b)=>a+b,0))})</td>
+                        <td className="py-2 px-2 text-right bg-rose-50/30">-</td>
+                      </tr>
+
+                      <tr className="bg-emerald-100/60 font-bold text-emerald-900 border-t-2 border-emerald-200">
+                        <td className="py-2.5 px-3 border-r pl-4">กระแสเงินสดสุทธิ เอกชน (Net Cash Flow)</td>
+                        <td className={`py-2.5 px-2 border-r text-right ${baseData.priv.net[0]>=0?'text-emerald-800':'text-red-600'}`}>{fmt(baseData.priv.net[0])}</td>
+                        <td className={`py-2.5 px-2 border-r text-right ${baseData.priv.net[1]>=0?'text-emerald-800':'text-red-600'}`}>{fmt(baseData.priv.net[1])}</td>
+                        <td className={`py-2.5 px-2 border-r text-right ${baseData.priv.net[2]>=0?'text-emerald-800':'text-red-600'}`}>{fmt(baseData.priv.net[2])}</td>
+                        <td className="py-2.5 px-2 border-r text-right bg-emerald-200/50">{fmt(baseData.priv.sum3Y)}</td>
+                        <td className="py-2.5 px-2 border-r text-right bg-emerald-300/60 text-emerald-950">{fmt(baseData.priv.npv)}</td>
+                        <td className={`py-2.5 px-2 border-r text-right bg-rose-100 ${sensData.priv.sum3Y>=0?'text-emerald-900':'text-red-700'}`}>{fmt(sensData.priv.sum3Y)}</td>
+                        <td className={`py-2.5 px-2 text-right bg-rose-200 ${sensData.priv.npv>=0?'text-emerald-950':'text-red-800'}`}>{fmt(sensData.priv.npv)}</td>
+                      </tr>
+
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Policy & Executive Feasibility Notes */}
+              <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                <h4 className="font-bold text-slate-800 text-sm mb-2 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                  บทสรุปผู้บริหารและความเป็นไปได้ในการลงทุน (Feasibility Analysis)
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-slate-600">
+                  <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200">
+                    <div className="font-bold text-brand-800 mb-1">ความเหมาะสมฝั่งเทศบาล (ผู้ให้เช่า):</div>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>คำนวณค่าเสื่อมราคาอาคารโรงฆ่าสัตว์ด้วยวิธีเส้นตรง จากมูลค่า {fmt(bldgVal)} บาท อายุการใช้งาน {bldgLife} ปี คิดเป็นค่าเสื่อมปีละ <span className="font-bold text-slate-800">{fmt(bldgDeprec)} บาท</span></li>
+                      <li>ราคากลางค่าเช่าปีที่ 1 เท่ากับ <span className="font-bold text-slate-800">{fmt(baseRentX)} บาท</span> สะท้อนต้นทุนการลงทุนจุดคุ้มทุนภายใน <span className="font-bold text-brand-700">{breakEvenMonths} เดือน</span> ตามที่กำหนด</li>
+                    </ul>
+                  </div>
+
+                  <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200">
+                    <div className="font-bold text-emerald-800 mb-1">แรงจูงใจฝั่งเอกชนผู้ประมูล (ผู้เช่า):</div>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>เอกชนจะมีกำไรสุทธิรวม 3 ปี เท่ากับ <span className="font-bold text-emerald-700">{fmt(baseData.priv.sum3Y)} บาท</span> (NPV เอกชน = {fmt(baseData.priv.npv)} บาท)</li>
+                      <li>ในกรณีเลวร้ายที่สุด (Sensitivity) สัตว์เข้าโรงฆ่าลดลง <span className="font-bold text-red-600">{sensDropPct}%</span> เอกชนยังคงมีกำไรสุทธิรวม <span className={`font-bold ${sensData.priv.sum3Y>=0?'text-emerald-700':'text-red-600'}`}>{fmt(sensData.priv.sum3Y)} บาท</span></li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
